@@ -1,0 +1,201 @@
+--- okhttp-parent-2.7.4/okhttp/src/main/java/com/squareup/okhttp/internal/Platform.java.orig	2016-02-16 19:40:17.125128173 +0000
++++ okhttp-parent-2.7.4/okhttp/src/main/java/com/squareup/okhttp/internal/Platform.java	2016-02-16 19:39:21.525551003 +0000
+@@ -16,7 +16,6 @@
+  */
+ package com.squareup.okhttp.internal;
+ 
+-import android.util.Log;
+ import com.squareup.okhttp.Protocol;
+ import com.squareup.okhttp.internal.tls.AndroidTrustRootIndex;
+ import com.squareup.okhttp.internal.tls.RealTrustRootIndex;
+@@ -126,49 +125,6 @@
+ 
+   /** Attempt to match the host runtime to a capable Platform implementation. */
+   private static Platform findPlatform() {
+-    // Attempt to find Android 2.3+ APIs.
+-    try {
+-      Class<?> sslParametersClass;
+-      try {
+-        sslParametersClass = Class.forName("com.android.org.conscrypt.SSLParametersImpl");
+-      } catch (ClassNotFoundException e) {
+-        // Older platform before being unbundled.
+-        sslParametersClass = Class.forName(
+-            "org.apache.harmony.xnet.provider.jsse.SSLParametersImpl");
+-      }
+-
+-      OptionalMethod<Socket> setUseSessionTickets
+-          = new OptionalMethod<>(null, "setUseSessionTickets", boolean.class);
+-      OptionalMethod<Socket> setHostname
+-          = new OptionalMethod<>(null, "setHostname", String.class);
+-      Method trafficStatsTagSocket = null;
+-      Method trafficStatsUntagSocket = null;
+-      OptionalMethod<Socket> getAlpnSelectedProtocol = null;
+-      OptionalMethod<Socket> setAlpnProtocols = null;
+-
+-      // Attempt to find Android 4.0+ APIs.
+-      try {
+-        Class<?> trafficStats = Class.forName("android.net.TrafficStats");
+-        trafficStatsTagSocket = trafficStats.getMethod("tagSocket", Socket.class);
+-        trafficStatsUntagSocket = trafficStats.getMethod("untagSocket", Socket.class);
+-
+-        // Attempt to find Android 5.0+ APIs.
+-        try {
+-          Class.forName("android.net.Network"); // Arbitrary class added in Android 5.0.
+-          getAlpnSelectedProtocol = new OptionalMethod<>(byte[].class, "getAlpnSelectedProtocol");
+-          setAlpnProtocols = new OptionalMethod<>(null, "setAlpnProtocols", byte[].class);
+-        } catch (ClassNotFoundException ignored) {
+-        }
+-      } catch (ClassNotFoundException | NoSuchMethodException ignored) {
+-      }
+-
+-      return new Android(sslParametersClass, setUseSessionTickets, setHostname,
+-          trafficStatsTagSocket, trafficStatsUntagSocket, getAlpnSelectedProtocol,
+-          setAlpnProtocols);
+-    } catch (ClassNotFoundException ignored) {
+-      // This isn't an Android runtime.
+-    }
+-
+     // Find an Oracle JDK.
+     try {
+       Class<?> sslContextClass = Class.forName("sun.security.ssl.SSLContextImpl");
+@@ -195,140 +151,6 @@
+     return new Platform();
+   }
+ 
+-  /** Android 2.3 or better. */
+-  private static class Android extends Platform {
+-    private static final int MAX_LOG_LENGTH = 4000;
+-
+-    private final Class<?> sslParametersClass;
+-    private final OptionalMethod<Socket> setUseSessionTickets;
+-    private final OptionalMethod<Socket> setHostname;
+-
+-    // Non-null on Android 4.0+.
+-    private final Method trafficStatsTagSocket;
+-    private final Method trafficStatsUntagSocket;
+-
+-    // Non-null on Android 5.0+.
+-    private final OptionalMethod<Socket> getAlpnSelectedProtocol;
+-    private final OptionalMethod<Socket> setAlpnProtocols;
+-
+-    public Android(Class<?> sslParametersClass, OptionalMethod<Socket> setUseSessionTickets,
+-        OptionalMethod<Socket> setHostname, Method trafficStatsTagSocket,
+-        Method trafficStatsUntagSocket, OptionalMethod<Socket> getAlpnSelectedProtocol,
+-        OptionalMethod<Socket> setAlpnProtocols) {
+-      this.sslParametersClass = sslParametersClass;
+-      this.setUseSessionTickets = setUseSessionTickets;
+-      this.setHostname = setHostname;
+-      this.trafficStatsTagSocket = trafficStatsTagSocket;
+-      this.trafficStatsUntagSocket = trafficStatsUntagSocket;
+-      this.getAlpnSelectedProtocol = getAlpnSelectedProtocol;
+-      this.setAlpnProtocols = setAlpnProtocols;
+-    }
+-
+-    @Override public void connectSocket(Socket socket, InetSocketAddress address,
+-        int connectTimeout) throws IOException {
+-      try {
+-        socket.connect(address, connectTimeout);
+-      } catch (AssertionError e) {
+-        if (Util.isAndroidGetsocknameError(e)) throw new IOException(e);
+-        throw e;
+-      } catch (SecurityException e) {
+-        // Before android 4.3, socket.connect could throw a SecurityException
+-        // if opening a socket resulted in an EACCES error.
+-        IOException ioException = new IOException("Exception in connect");
+-        ioException.initCause(e);
+-        throw ioException;
+-      }
+-    }
+-
+-    @Override public X509TrustManager trustManager(SSLSocketFactory sslSocketFactory) {
+-      Object context = readFieldOrNull(sslSocketFactory, sslParametersClass, "sslParameters");
+-      if (context == null) {
+-        // If that didn't work, try the Google Play Services SSL provider before giving up. This
+-        // must be loaded by the SSLSocketFactory's class loader.
+-        try {
+-          Class<?> gmsSslParametersClass = Class.forName(
+-              "com.google.android.gms.org.conscrypt.SSLParametersImpl", false,
+-              sslSocketFactory.getClass().getClassLoader());
+-          context = readFieldOrNull(sslSocketFactory, gmsSslParametersClass, "sslParameters");
+-        } catch (ClassNotFoundException e) {
+-          return null;
+-        }
+-      }
+-
+-      X509TrustManager x509TrustManager = readFieldOrNull(
+-          context, X509TrustManager.class, "x509TrustManager");
+-      if (x509TrustManager != null) return x509TrustManager;
+-
+-      return readFieldOrNull(context, X509TrustManager.class, "trustManager");
+-    }
+-
+-    @Override public TrustRootIndex trustRootIndex(X509TrustManager trustManager) {
+-      TrustRootIndex result = AndroidTrustRootIndex.get(trustManager);
+-      if (result != null) return result;
+-      return super.trustRootIndex(trustManager);
+-    }
+-
+-    @Override public void configureTlsExtensions(
+-        SSLSocket sslSocket, String hostname, List<Protocol> protocols) {
+-      // Enable SNI and session tickets.
+-      if (hostname != null) {
+-        setUseSessionTickets.invokeOptionalWithoutCheckedException(sslSocket, true);
+-        setHostname.invokeOptionalWithoutCheckedException(sslSocket, hostname);
+-      }
+-
+-      // Enable ALPN.
+-      if (setAlpnProtocols != null && setAlpnProtocols.isSupported(sslSocket)) {
+-        Object[] parameters = { concatLengthPrefixed(protocols) };
+-        setAlpnProtocols.invokeWithoutCheckedException(sslSocket, parameters);
+-      }
+-    }
+-
+-    @Override public String getSelectedProtocol(SSLSocket socket) {
+-      if (getAlpnSelectedProtocol == null) return null;
+-      if (!getAlpnSelectedProtocol.isSupported(socket)) return null;
+-
+-      byte[] alpnResult = (byte[]) getAlpnSelectedProtocol.invokeWithoutCheckedException(socket);
+-      return alpnResult != null ? new String(alpnResult, Util.UTF_8) : null;
+-    }
+-
+-    @Override public void tagSocket(Socket socket) throws SocketException {
+-      if (trafficStatsTagSocket == null) return;
+-
+-      try {
+-        trafficStatsTagSocket.invoke(null, socket);
+-      } catch (IllegalAccessException e) {
+-        throw new RuntimeException(e);
+-      } catch (InvocationTargetException e) {
+-        throw new RuntimeException(e.getCause());
+-      }
+-    }
+-
+-    @Override public void untagSocket(Socket socket) throws SocketException {
+-      if (trafficStatsUntagSocket == null) return;
+-
+-      try {
+-        trafficStatsUntagSocket.invoke(null, socket);
+-      } catch (IllegalAccessException e) {
+-        throw new RuntimeException(e);
+-      } catch (InvocationTargetException e) {
+-        throw new RuntimeException(e.getCause());
+-      }
+-    }
+-
+-    @Override public void log(String message) {
+-      // Split by line, then ensure each line can fit into Log's maximum length.
+-      for (int i = 0, length = message.length(); i < length; i++) {
+-        int newline = message.indexOf('\n', i);
+-        newline = newline != -1 ? newline : length;
+-        do {
+-          int end = Math.min(newline, i + MAX_LOG_LENGTH);
+-          Log.d("OkHttp", message.substring(i, end));
+-          i = end;
+-        } while (i < newline);
+-      }
+-    }
+-  }
+-
+   /** JDK 1.7 or better. */
+   private static class JdkPlatform extends Platform {
+     private final Class<?> sslContextClass;

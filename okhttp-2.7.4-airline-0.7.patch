@@ -1,0 +1,19 @@
+--- okhttp-parent-2.7.4/okcurl/src/main/java/com/squareup/okhttp/curl/Main.java.orig	2016-02-16 18:49:21.626138275 +0000
++++ okhttp-parent-2.7.4/okcurl/src/main/java/com/squareup/okhttp/curl/Main.java	2016-02-16 18:52:18.115510706 +0000
+@@ -27,11 +27,11 @@
+ import com.squareup.okhttp.internal.http.StatusLine;
+ import com.squareup.okhttp.internal.framed.Http2;
+ 
+-import io.airlift.command.Arguments;
+-import io.airlift.command.Command;
+-import io.airlift.command.HelpOption;
+-import io.airlift.command.Option;
+-import io.airlift.command.SingleCommand;
++import io.airlift.airline.Arguments;
++import io.airlift.airline.Command;
++import io.airlift.airline.HelpOption;
++import io.airlift.airline.Option;
++import io.airlift.airline.SingleCommand;
+ import java.io.IOException;
+ import java.io.InputStream;
+ import java.security.cert.CertificateException;
